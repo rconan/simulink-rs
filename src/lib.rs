@@ -182,7 +182,6 @@ macro_rules! build_controller {
                 this
             }
         }}
-        use $crate::controllers::Simulink;
         paste::paste! {
         impl<'a> Simulink for Controller<'a> {
             fn initialize(&mut self) {
