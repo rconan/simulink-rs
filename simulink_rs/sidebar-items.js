@@ -1,0 +1,1 @@
+initSidebarItems({"macro":[["build_controller","Build the controller"],["build_inputs","Build the controller inputs"],["build_outputs","Build the controller outputs"],["import_simulink","Import Simulink C definitions"]],"trait":[["Simulink",""]]});
