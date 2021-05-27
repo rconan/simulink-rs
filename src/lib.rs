@@ -1,6 +1,6 @@
-//! # GMT SIMULINK CONTROLLER BRIDGE
+//! # Rust bindings for Simulink C control system
 //!
-//! This is an interface to build and to run a controller design with Simulink inside Rust
+//! This is an interface to import and to run a controller designed with Simulink inside Rust
 //! ## Example
 //! A Simulink model named `SimControl` with 1 input `SimIn1` of size 6 and 1 output `SimOut1` of size 3 is imported into Rust with:
 //! ```rust
@@ -8,7 +8,26 @@
 //! build_inputs!(In1,6)
 //! build_inputs!(Out1,3)
 //! build_controller!(SimControl, U: (SimIn1 -> (In1,in1)), Y: (SimOut1 -> (Out1,out1)))
-//! ```
+//!```
+//! A more complex example is the mapping of a single input and a single output of a Simulink controller to multiple inputs and outputs in rust.
+//! `SimControl` has now 1 input `SimIn1` of size 14 and 1 output `SimOut1`of size 20.
+//! `SimIn1` is mapped to 3 Rust inputs `In1`, `In2` and `In3` of sizes 6, 4 and 4, respectively.
+//! `SimOut1` is mapped to 3 Rust outputs `Out1`, `Out2` and `Out3` of sizes 12, 4 and 4, respectively.
+//! The rust binding is:
+//! ```rust
+//! import_simulink!(SimControl, U : (SimIn1,14), Y : (SimOut1,20))
+//! build_inputs!(In1, 14, 0, In2, 14, 6, In3, 14, 10)
+//! build_inputs!(Out1, 20, 12, 0, Out2, 20, 4, 12, Out3, 20, 4, 16)
+//! build_controller!(SimControl,
+//!                   U: (SimIn1 -> (In1,in1),
+//!                       SimIn2 -> (In2,in2),
+//!                       SimIn3 -> (In3,in3)),
+//!                   Y: (SimOut1 -> (Out1,out1),
+//!                       SimOut2 -> (Out2,out2),
+//!                       SimOut3 -> (Out3,out3)))
+//!```
+//! For the inputs, the mapping consists in the size of the Simulink input and the index in the Simulink input where the Rust inputs start.
+//! For the outputs, the mapping consists in the size of the Simulink input, the size of the Rust outputs and the index in the Simulink output where the rust outputs start.
 
 pub trait Simulink {
     fn initialize(&mut self);
