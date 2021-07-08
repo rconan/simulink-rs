@@ -241,3 +241,68 @@ macro_rules! build_controller {
         }
     };
 }
+#[macro_export]
+macro_rules! build_controller_with_data {
+    ($controller:ident, U : ($($sim_u:ident -> ($enum_u:ident,$var_u:ident)),+) , Y : ($($sim_y:ident -> ($enum_y:ident,$var_y:ident)),+)) => {
+        /// Controller
+        pub struct Controller<'a,T> {
+            $(pub $var_u: U<'a>,)+
+	    $(pub $var_y: Y<'a>,)+
+	    data: T
+
+        }
+        paste::paste!{
+        impl<'a,T> Controller<'a, T> {
+            /// Creates a new controller
+            pub fn new(data: T) -> Self {
+                let mut this = unsafe {
+                    Self {
+                        $($var_u: U::$enum_u(&mut [<$controller _U>].$sim_u),)+
+                        $($var_y: Y::$enum_y(&mut [<$controller _Y>].$sim_y),)+
+			data
+                    }
+                };
+                this.initialize();
+                this
+            }
+        }}
+        paste::paste! {
+        impl<'a,T> Simulink for Controller<'a,T> {
+            fn initialize(&mut self) {
+                unsafe {
+                    [<$controller _initialize>]();
+                }
+            }
+            fn __step__(&self) {
+                unsafe {
+                    [<$controller _step>]();
+                }
+            }
+            fn terminate(&self) {
+                unsafe {
+                    [<$controller _terminate>]();
+                }
+            }
+        }
+        }
+        impl<'a,T> Drop for Controller<'a,T> {
+            fn drop(&mut self) {
+                self.terminate()
+            }
+        }
+        impl<'a,T> Iterator for &Controller<'a,T> {
+            type Item = ();
+            fn next(&mut self) -> Option<Self::Item> {
+                self.__step__();
+                Some(())
+            }
+        }
+        impl<'a,T> Iterator for Controller<'a,T> {
+            type Item = ();
+            fn next(&mut self) -> Option<Self::Item> {
+                self.__step__();
+                Some(())
+            }
+        }
+    };
+}
