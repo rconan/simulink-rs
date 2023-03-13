@@ -1,0 +1,21 @@
+[package]
+name = "..."
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+documentation.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+simulink-rs.workspace = true
+
+[build-dependencies]
+simulink-rs.workspace = true
+
+[dev-dependencies]
+matio-rs.workspace = true

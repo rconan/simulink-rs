@@ -1,308 +1,309 @@
-//! # Rust bindings for Simulink C control system
+//! # Simulink C Rust wrapper and binder
 //!
-//! This is an interface to import and to run a controller designed with Simulink inside Rust
-//! ## Example
-//! A Simulink model named `SimControl` with 1 input `SimIn1` of size 6 and 1 output `SimOut1` of size 3 is imported into Rust with:
-//! ```rust
-//! import_simulink!(SimControl, U : (SimIn1,6), Y : (SimOut1,3))
-//! build_inputs!(In1,6)
-//! build_inputs!(Out1,3)
-//! build_controller!(SimControl, U: (SimIn1 -> (In1,in1)), Y: (SimOut1 -> (Out1,out1)))
-//!```
-//! A more complex example is the mapping of a single input and a single output of a Simulink controller to multiple inputs and outputs in rust.
-//! `SimControl` has now 1 input `SimIn1` of size 14 and 1 output `SimOut1`of size 20.
-//! `SimIn1` is mapped to 3 Rust inputs `In1`, `In2` and `In3` of sizes 6, 4 and 4, respectively.
-//! `SimOut1` is mapped to 3 Rust outputs `Out1`, `Out2` and `Out3` of sizes 12, 4 and 4, respectively.
-//! The rust binding is:
-//! ```rust
-//! import_simulink!(SimControl, U : (SimIn1,14), Y : (SimOut1,20))
-//! build_inputs!(In1, 14, 0, In2, 14, 6, In3, 14, 10)
-//! build_inputs!(Out1, 20, 12, 0, Out2, 20, 4, 12, Out3, 20, 4, 16)
-//! build_controller!(SimControl,
-//!                   U: (SimIn1 -> (In1,in1),
-//!                       SimIn2 -> (In2,in2),
-//!                       SimIn3 -> (In3,in3)),
-//!                   Y: (SimOut1 -> (Out1,out1),
-//!                       SimOut2 -> (Out2,out2),
-//!                       SimOut3 -> (Out3,out3)))
-//!```
-//! For the inputs, the mapping consists in the size of the Simulink input and the index in the Simulink input where the Rust inputs start.
-//! For the outputs, the mapping consists in the size of the Simulink input, the size of the Rust outputs and the index in the Simulink output where the rust outputs start.
+//! A Rust library to import generated C code from Simulink in Rust
+//!
+//! # Example
+//! ```ignore
+//! let sys = Sys::new(Some("MySimulinkController"));
+//! sys.compile().generate_module();
+//! ```
 
-pub trait Simulink {
-    fn initialize(&mut self);
-    fn __step__(&self);
-    fn terminate(&self);
+use regex::Regex;
+use std::{
+    env,
+    fmt::Display,
+    fs::{self, File},
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+};
+
+/// Simulink inputs/outputs/states
+#[derive(Debug, Default)]
+struct IO {
+    /// i/o variable name
+    pub name: String,
+    /// i/o variable size
+    pub size: Option<usize>,
 }
-
-/// Import Simulink C definitions
-///
-/// An Simulink C import is written:  `(Simulink controller name, U : (<Simulink input name,size>,<...>,...), Y : (<Simulink output name,size>,<...>,...))`
-#[macro_export]
-macro_rules! import_simulink {
-    ($controller:ident, U : ($($sim_u:ident, $size_u:expr),+), Y : ($($sim_y:ident, $size_y:expr),+)) => {
-        paste::paste!{
-            /// Simulink external input (U)
-            #[repr(C)]
-            #[allow(non_snake_case)]
-            #[derive(Debug)]
-            struct [<ExtU_ $controller _T>] {
-            $($sim_u: [f64;$size_u],)+
-        }}
-        paste::paste!{
-            /// Simulink external output (Y)
-            #[repr(C)]
-            #[allow(non_snake_case)]
-            #[derive(Debug)]
-            struct [<ExtY_ $controller _T>] {
-            $($sim_y: [f64;$size_y],)+
-        }}
-
-        paste::paste!{
-        extern "C" {
-            fn [<$controller _initialize>]();
-            fn [<$controller _step>]();
-            fn [<$controller _terminate>]();
-            static mut [<$controller _U>]: [<ExtU_ $controller _T>];
-            static mut [<$controller _Y>]: [<ExtY_ $controller _T>];
-        }}
-    };
-}
-
-/// Build the controller inputs
-///
-/// An input definition is: `(<enum name,size>,<...>,...)` or `(<enum name,size,offset>,<...>,...)` with
-///  - `enum name`: the name of the input enum variant (U::name)
-///  - `size`: the size of the corresponding Simulink input
-///  - `offset`: the pointer offset in the corresponding Simulink input
-#[macro_export]
-macro_rules! build_inputs {
-    ($($name:ident, $size:expr),+) => {
-        /// Controller inputs U
-        #[derive(Debug)]
-        pub enum U<'a> {
-            $($name(&'a mut [f64; $size])),+
-        }
-        impl<'a> std::ops::Index<usize> for U<'a> {
-            type Output = f64;
-            fn index(&self, index: usize) -> &Self::Output {
-                match self {
-                    $(U::$name(data) => &data[index]),+
-                }
-            }
-        }
-        impl<'a> std::ops::IndexMut<usize> for U<'a> {
-            fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-                match self {
-                    $(U::$name(data) => &mut data[index]),+
-                }
-            }
-        }
-    };
-    ($($name:ident, $size:expr,$offset:expr),+) => {
-        /// Controller inputs U
-        #[derive(Debug)]
-        pub enum U<'a> {
-            $($name(&'a mut [f64; $size])),+
-        }
-        impl<'a> std::ops::Index<usize> for U<'a> {
-            type Output = f64;
-            fn index(&self, index: usize) -> &Self::Output {
-                match self {
-                    $(U::$name(data) => &data[index + $offset]),+
-                }
-            }
-        }
-        impl<'a> std::ops::IndexMut<usize> for U<'a> {
-            fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-                match self {
-                    $(U::$name(data) => &mut data[index + $offset]),+
-                }
-            }
-        }
-    };
-}
-/// Build the controller outputs
-///
-///
-/// An output definition is: `(<enum name,size>,<...>,...)` or `(<enum name,size,offset>,<...>,...)` with
-///  - `enum name`: the name of the output enum variant (Y::name)
-///  - `size`: the size of the corresponding Simulink output
-///  - `offset`: the pointer offset in the corresponding Simulink output
-#[macro_export]
-macro_rules! build_outputs {
-    ($($name:ident, $size:expr),+) => {
-        /// Controller outputs Y
-        #[derive(Debug)]
-        pub enum Y<'a> {
-            $($name(&'a mut [f64; $size])),+
-        }
-        impl<'a> std::ops::Index<usize> for Y<'a> {
-            type Output = f64;
-            fn index(&self, index: usize) -> &Self::Output {
-                match self {
-                    $(Y::$name(data) => &data[index]),+
-                }
-            }
-        }
-        impl<'a> From<&Y<'a>> for Vec<f64> {
-            fn from(y: &Y<'a>) -> Vec<f64> {
-                match y {
-                    $(Y::$name(data) => data.to_vec()),+
-                }
-            }
-        }
-    };
-    ($($name:ident, $size:expr,$subsize:expr,$offset:expr),+) => {
-        /// Controller outputs Y
-        #[derive(Debug)]
-        pub enum Y<'a> {
-            $($name(&'a mut [f64; $size])),+
-        }
-        impl<'a> std::ops::Index<usize> for Y<'a> {
-            type Output = f64;
-            fn index(&self, index: usize) -> &Self::Output {
-                match self {
-                    $(Y::$name(data) => &data[index + $offset]),+
-                }
-            }
-        }
-        impl<'a> From<&Y<'a>> for Vec<f64> {
-            fn from(y: &Y<'a>) -> Vec<f64> {
-                match y {
-                    $(Y::$name(data) => data[$offset..$offset+$subsize].to_vec()),+
-                }
-            }
+impl IO {
+    /// Creates a new IO
+    fn new(name: &str, size: Option<&str>) -> Self {
+        Self {
+            name: name.to_string(),
+            size: size.and_then(|s| s.parse().ok()),
         }
     }
 }
-/// Build the controller
-///
-/// A controller definition is: `(Simulink controller name, U : (<Simulink input name -> (enum type,variable name)>,<...>,...), Y : (<Simulink output name -> (enum type,variable name)>,<...>,...))`
-#[macro_export]
-macro_rules! build_controller {
-    ($controller:ident, U : ($($sim_u:ident -> ($enum_u:ident,$var_u:ident)),+) , Y : ($($sim_y:ident -> ($enum_y:ident,$var_y:ident)),+)) => {
-        /// Controller
-        pub struct Controller<'a> {
-            $(pub $var_u: U<'a>,)+
-            $(pub $var_y: Y<'a>,)+
-        }
-        paste::paste!{
-        impl<'a> Controller<'a> {
-            /// Creates a new controller
-            pub fn new() -> Self {
-                let mut this = unsafe {
-                    Self {
-                        $($var_u: U::$enum_u(&mut [<$controller _U>].$sim_u),)+
-                        $($var_y: Y::$enum_y(&mut [<$controller _Y>].$sim_y),)+
-                    }
-                };
-                this.initialize();
-                this
-            }
-        }}
-        paste::paste! {
-        impl<'a> Simulink for Controller<'a> {
-            fn initialize(&mut self) {
-                unsafe {
-                    [<$controller _initialize>]();
+/// List of Simulink inputs/outputs/states
+#[derive(Debug, Default)]
+struct List(Vec<IO>);
+impl Display for List {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let var: Vec<_> = self
+            .0
+            .iter()
+            .map(|IO { name, size }| {
+                if let Some(size) = size {
+                    format!("{}: [0f64; {}]", name, size)
+                } else {
+                    format!("{}: 0f64", name)
                 }
-            }
-            fn __step__(&self) {
-                unsafe {
-                    [<$controller _step>]();
-                }
-            }
-            fn terminate(&self) {
-                unsafe {
-                    [<$controller _terminate>]();
-                }
-            }
-        }
-        }
-        impl<'a> Drop for Controller<'a> {
-            fn drop(&mut self) {
-                self.terminate()
-            }
-        }
-        impl<'a> Iterator for &Controller<'a> {
-            type Item = ();
-            fn next(&mut self) -> Option<Self::Item> {
-                self.__step__();
-                Some(())
-            }
-        }
-        impl<'a> Iterator for Controller<'a> {
-            type Item = ();
-            fn next(&mut self) -> Option<Self::Item> {
-                self.__step__();
-                Some(())
-            }
-        }
-    };
+            })
+            .collect();
+        write!(f, "{}", var.join(","))
+    }
 }
-#[macro_export]
-macro_rules! build_controller_with_data {
-    ($controller:ident, U : ($($sim_u:ident -> ($enum_u:ident,$var_u:ident)),+) , Y : ($($sim_y:ident -> ($enum_y:ident,$var_y:ident)),+)) => {
-        /// Controller
-        pub struct Controller<'a,T> {
-            $(pub $var_u: U<'a>,)+
-	    $(pub $var_y: Y<'a>,)+
-	    data: T
 
-        }
-        paste::paste!{
-        impl<'a,T> Controller<'a, T> {
-            /// Creates a new controller
-            pub fn new(data: T) -> Self {
-                let mut this = unsafe {
-                    Self {
-                        $($var_u: U::$enum_u(&mut [<$controller _U>].$sim_u),)+
-                        $($var_y: Y::$enum_y(&mut [<$controller _Y>].$sim_y),)+
-			data
-                    }
-                };
-                this.initialize();
-                this
-            }
-        }}
-        paste::paste! {
-        impl<'a,T> Simulink for Controller<'a,T> {
-            fn initialize(&mut self) {
-                unsafe {
-                    [<$controller _initialize>]();
-                }
-            }
-            fn __step__(&self) {
-                unsafe {
-                    [<$controller _step>]();
-                }
-            }
-            fn terminate(&self) {
-                unsafe {
-                    [<$controller _terminate>]();
-                }
-            }
-        }
-        }
-        impl<'a,T> Drop for Controller<'a,T> {
-            fn drop(&mut self) {
-                self.terminate()
-            }
-        }
-        impl<'a,T> Iterator for &Controller<'a,T> {
-            type Item = ();
-            fn next(&mut self) -> Option<Self::Item> {
-                self.__step__();
-                Some(())
-            }
-        }
-        impl<'a,T> Iterator for Controller<'a,T> {
-            type Item = ();
-            fn next(&mut self) -> Option<Self::Item> {
-                self.__step__();
-                Some(())
-            }
-        }
-    };
+/// Simulink model description
+#[derive(Debug, Default)]
+struct Model {
+    name: String,
+    inputs: List,
+    outputs: List,
+    states: List,
 }
+impl Display for Model {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            r"
+        /// Simulink controller wrapper
+        #[derive(Debug, Clone, Copy, Default)]
+        pub struct {model} {{
+            // Inputs Simulink structure
+            pub inputs: ExtU_{model}_T,
+            // Outputs Simulink structure
+            pub outputs: ExtY_{model}_T,
+            states: DW_{model}_T,
+        }}
+        impl Default for ExtU_{model}_T {{
+            fn default() -> Self {{
+                Self {{ {var_u} }}
+            }}
+        }}
+        impl Default for ExtY_{model}_T {{
+            fn default() -> Self {{
+                Self {{ {var_y} }}
+            }}
+        }}
+        impl Default for DW_{model}_T {{
+            fn default() -> Self {{
+                Self {{ {var_x} }}
+            }}
+        }}
+        impl {model} {{
+            /// Creates a new controller
+            pub fn new() -> Self {{
+                let mut this: Self = Default::default();
+                let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
+                    dwork: &mut this.states as *mut _,
+                }};
+                unsafe {{
+                     {model}_initialize(
+                        &mut data as *mut _,
+                        &mut this.inputs as *mut _,
+                        &mut this.outputs as *mut _,
+                    )
+                }}
+                this
+            }}
+            /// Steps the controller
+            pub fn step(&mut self) {{
+                let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
+                    dwork: &mut self.states as *mut _,
+                }};
+                unsafe {{
+                    {model}_step(
+                        &mut data as *mut _,
+                        &mut self.inputs as *mut _,
+                        &mut self.outputs as *mut _,
+                    )
+                }}
+            }}
+        }}        
+        ",
+            model = self.name,
+            var_u = self.inputs.to_string(),
+            var_y = self.outputs.to_string(),
+            var_x = self.states.to_string(),
+        )
+    }
+}
+
+/// Parse the Simulink C header file to extract inputs, outputs or states variables
+fn parse_io(lines: &mut std::io::Lines<BufReader<File>>, io: &str) -> Option<List> {
+    let re = Regex::new(r"_T (?P<name>\w+)(?:\[(?P<size>\d+)\])?").unwrap();
+    match lines.next() {
+        Some(Ok(line)) if line.starts_with("typedef struct") => {
+            println!("| {}:", io);
+            let mut io_data = vec![];
+            while let Some(Ok(line)) = lines.next() {
+                if line.contains(io) {
+                    break;
+                } else {
+                    if let Some(caps) = re.captures(&line) {
+                        let size = caps.name("size").map(|m| m.as_str());
+                        println!("|  - {:<22}: {:>5}", &caps["name"], size.unwrap_or("1"),);
+                        io_data.push(IO::new(&caps["name"], size))
+                    }
+                }
+            }
+            Some(List(io_data))
+        }
+        _ => None,
+    }
+}
+
+/// Simulink control system C source and header files parser and builder
+///
+/// # Example
+/// ```ignore
+/// let sys = Sys::new(Some("MySimulinkController"));
+/// sys.compile().generate_module();
+/// ```
+pub struct Sys {
+    controller: Option<String>,
+    sources: Vec<PathBuf>,
+    headers: Vec<PathBuf>,
+}
+
+impl Sys {
+    /// Create a new Simulink FFI
+    ///
+    /// The Simulink controlller will be given the type `rs_type` if present
+    pub fn new<S: Into<String>>(rs_type: Option<S>) -> Self {
+        let sys = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("sys");
+
+        let mut sources = vec![];
+        let mut headers = vec![];
+
+        if let Ok(entries) = fs::read_dir(&sys) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let file_name = entry.path();
+                    if let Some(extension) = file_name.extension() {
+                        match extension.to_str() {
+                            Some("c") => {
+                                sources.push(file_name);
+                            }
+                            Some("h") => {
+                                headers.push(file_name);
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+            }
+        }
+
+        Self {
+            controller: rs_type.map(|x| x.into()),
+            sources,
+            headers,
+        }
+    }
+    /// Returns the main header file
+    fn header(&self) -> Option<&str> {
+        self.headers.iter().find_map(|header| {
+            header.to_str().filter(|f| {
+                !(f.ends_with("rtwtypes.h")
+                    || f.ends_with("rt_defines.h")
+                    || f.ends_with("_private.h")
+                    || f.ends_with("_types.h"))
+            })
+        })
+    }
+    /// Parses the main header file into [Model]
+    ///
+    /// Extract the model name and the lists of inputs, outputs and states variables
+    /// and creates a [Model]
+    fn parse_header(&self) -> Model {
+        let Some(header) = self.header() else { panic!("cannot find error in sys")};
+        let file = File::open(header).expect(&format!("file {:?} not found", header));
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        let mut model = Model::default();
+        model.name = loop {
+            if let Some(Ok(line)) = lines.next() {
+                if line.contains("File:") {
+                    let regex = Regex::new(r"File:\s*(\w+)\.h").unwrap();
+                    if let Some(captures) = regex.captures(&line) {
+                        let name = captures.get(1).unwrap().as_str();
+                        break name.to_string();
+                    }
+                }
+            }
+        };
+        while let Some(Ok(line)) = lines.next() {
+            if line.contains("External inputs") {
+                model.inputs = parse_io(&mut lines, "ExtU").unwrap();
+            }
+            if line.contains("External outputs") {
+                model.outputs = parse_io(&mut lines, "ExtY").unwrap();
+            }
+            if line.contains("Block states") {
+                model.states = parse_io(&mut lines, "DW").unwrap();
+            }
+        }
+        model
+    }
+    /// Compiles the Simulink C model
+    pub fn compile(&self) -> &Self {
+        let mut cc_builder = cc::Build::new();
+        self.sources
+            .iter()
+            .fold(&mut cc_builder, |cc_builder, source| {
+                cc_builder.file(source)
+            });
+        let bindings_builder = self
+            .headers
+            .iter()
+            .fold(bindgen::builder(), |bindings, header| {
+                println!("cargo:rerun-if-changed={:}", header.to_str().unwrap());
+                bindings.header(
+                    header
+                        .to_str()
+                        .expect(&format!("{:?} conversion to str failed", header)),
+                )
+            });
+
+        let lib = env::var("CARGO_PKG_NAME").unwrap();
+        println!("cargo:rustc-link-search=native=lib{}", lib);
+        println!("cargo:rustc-link-lib={}", lib);
+
+        cc_builder.compile(lib.as_str());
+        let bindings = bindings_builder
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+            .generate()
+            .expect("Unable to generate bindings");
+        let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        bindings
+            .write_to_file(out_path.join("bindings.rs"))
+            .expect("Couldn't write bindings!");
+        self
+    }
+    /// Generates the controller.rs module
+    pub fn generate_module(&self) {
+        let out_dir = env::var_os("OUT_DIR").unwrap();
+        let dest_path = Path::new(&out_dir).join("controller.rs");
+        fs::write(&dest_path, format!("{}", self)).unwrap();
+    }
+}
+
+impl Display for Sys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let model = self.parse_header();
+        if let Some(controller) = self.controller.as_ref() {
+            writeln!(f, "/// Rust binder to Simulink C controller wrapper")?;
+            writeln!(f, "#[allow(dead_code)]")?;
+            writeln!(f, "pub type {} = {};", controller, model.name)?;
+        }
+        model.fmt(f)
+    }
+}
+/*
+pub fn build() {
+    let sys = Sys::new();
+    sys.compile().generate_module();
+} */

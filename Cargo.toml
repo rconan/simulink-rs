@@ -1,9 +1,14 @@
 [package]
 name = "simulink-rs"
-version = "0.1.0"
-authors = ["Rod Conan <rconan@gmto.org>"]
-edition = "2018"
+version = "2.0.0"
+edition = "2021"
 license = "MIT"
-description = "Simulink C to Rust macros"
-repository = "https://github.com/rconan/simulink-rs"
-documentation = "https://docs.rs/simulink-rs"
+description = "Simulink C to Rust library builder"
+repository = "https://github.com/rconan/simulink-binder"
+documentation = "https://docs.rs/simulink-binder"
+readme = "README.md"
+
+[dependencies]
+bindgen = "0.64.0"
+cc = "1.0.79"
+regex = "1.7.1"
