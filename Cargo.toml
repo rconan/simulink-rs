@@ -1,11 +1,11 @@
 [package]
 name = "simulink-rs"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 license = "MIT"
 description = "Simulink C to Rust library builder"
-repository = "https://github.com/rconan/simulink-binder"
-documentation = "https://docs.rs/simulink-binder"
+repository = "https://github.com/rconan/simulink-rs"
+documentation = "https://docs.rs/simulink-rs"
 readme = "README.md"
 
 [dependencies]
