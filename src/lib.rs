@@ -99,11 +99,7 @@ impl Display for Model {
                     dwork: &mut this.states as *mut _,
                 }};
                 unsafe {{
-                     {model}_initialize(
-                        &mut data as *mut _,
-                        &mut this.inputs as *mut _,
-                        &mut this.outputs as *mut _,
-                    )
+                     {model}_initialize(&mut data as *mut _)
                 }}
                 this
             }}
@@ -242,7 +238,7 @@ impl Sys {
             if line.contains("External outputs") {
                 model.outputs = parse_io(&mut lines, "ExtY").unwrap();
             }
-            if line.contains("Block states") {
+            if line.contains("Block signals") {
                 model.states = parse_io(&mut lines, "DW").unwrap();
             }
         }
