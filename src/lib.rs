@@ -11,22 +11,23 @@
 use regex::Regex;
 use std::{
     env,
-    fmt::Display,
+    fmt::{Debug, Display},
     fs::{self, File},
     io::{BufRead, BufReader},
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
 };
 
-/// Simulink inputs/outputs/states
+/// Simulink structure properties
 #[derive(Debug, Default)]
-struct IO {
+pub struct IO {
     /// i/o variable name
     pub name: String,
     /// i/o variable size
     pub size: Option<usize>,
 }
 impl IO {
-    /// Creates a new IO
+    /// Creates a new property
     fn new(name: &str, size: Option<&str>) -> Self {
         Self {
             name: name.to_string(),
@@ -34,9 +35,21 @@ impl IO {
         }
     }
 }
-/// List of Simulink inputs/outputs/states
+/// List of Simulink properties
 #[derive(Debug, Default)]
-struct List(Vec<IO>);
+pub struct List(Vec<IO>);
+impl Deref for List {
+    type Target = Vec<IO>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for List {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl Display for List {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let var: Vec<_> = self
@@ -44,112 +57,135 @@ impl Display for List {
             .iter()
             .map(|IO { name, size }| {
                 if let Some(size) = size {
-                    format!("{}: [0f64; {}]", name, size)
+                    format!("{}: [Default::default(); {}]", name, size)
                 } else {
-                    format!("{}: 0f64", name)
+                    format!("{}: Default::default()", name)
                 }
             })
             .collect();
-        write!(f, "{}", var.join(","))
+        writeln!(f, "\n{}", var.join(",\n"))
     }
 }
 
-/// Simulink model description
+/// Simulink structure
 #[derive(Debug, Default)]
+pub struct SimulinkStruct {
+    pub name: String,
+    pub properties: List,
+}
+
+/// Simulink model description
+#[derive(Default)]
 struct Model {
     name: String,
-    inputs: List,
-    outputs: List,
-    states: List,
+    simulink_struct: Vec<SimulinkStruct>,
 }
+
 impl Display for Model {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
             r"
-        /// Simulink controller wrapper
-        #[derive(Debug, Clone, Copy, Default)]
-        pub struct {model} {{
-            // Inputs Simulink structure
-            pub inputs: ExtU_{model}_T,
-            // Outputs Simulink structure
-            pub outputs: ExtY_{model}_T,
-            states: DW_{model}_T,
+/// Simulink controller wrapper
+#[derive(Debug, Clone, Copy, Default)]
+pub struct {model} {{
+    // Inputs Simulink structure
+    pub inputs: ExtU_{model}_T,
+    // Outputs Simulink structure
+    pub outputs: ExtY_{model}_T,
+    states: DW_{model}_T,
+}}",
+            model = self.name,
+        )?;
+
+        for simulink_struct in &self.simulink_struct {
+            writeln!(f, r"{}", simulink_struct.default_as_string())?;
+        }
+        writeln!(
+            f,
+            r"
+ impl {model} {{
+    /// Creates a new controller
+    pub fn new() -> Self {{
+        let mut this: Self = Default::default();
+        let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
+            dwork: &mut this.states as *mut _,
+        }};
+        unsafe {{
+             {model}_initialize(&mut data as *mut _)
         }}
-        impl Default for ExtU_{model}_T {{
-            fn default() -> Self {{
-                Self {{ {var_u} }}
-            }}
+        this
+    }}
+    /// Steps the controller
+    pub fn step(&mut self) {{
+        let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
+            dwork: &mut self.states as *mut _,
+        }};
+        unsafe {{
+            {model}_step(
+                &mut data as *mut _,
+                &mut self.inputs as *mut _,
+                &mut self.outputs as *mut _,
+            )
         }}
-        impl Default for ExtY_{model}_T {{
-            fn default() -> Self {{
-                Self {{ {var_y} }}
-            }}
-        }}
-        impl Default for DW_{model}_T {{
-            fn default() -> Self {{
-                Self {{ {var_x} }}
-            }}
-        }}
-        impl {model} {{
-            /// Creates a new controller
-            pub fn new() -> Self {{
-                let mut this: Self = Default::default();
-                let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
-                    dwork: &mut this.states as *mut _,
-                }};
-                unsafe {{
-                     {model}_initialize(&mut data as *mut _)
-                }}
-                this
-            }}
-            /// Steps the controller
-            pub fn step(&mut self) {{
-                let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
-                    dwork: &mut self.states as *mut _,
-                }};
-                unsafe {{
-                    {model}_step(
-                        &mut data as *mut _,
-                        &mut self.inputs as *mut _,
-                        &mut self.outputs as *mut _,
-                    )
-                }}
-            }}
-        }}        
+    }}
+}}
         ",
             model = self.name,
-            var_u = self.inputs.to_string(),
-            var_y = self.outputs.to_string(),
-            var_x = self.states.to_string(),
         )
     }
 }
 
-/// Parse the Simulink C header file to extract inputs, outputs or states variables
-fn parse_io(lines: &mut std::io::Lines<BufReader<File>>, io: &str) -> Option<List> {
-    let re = Regex::new(r"_T (?P<name>\w+)(?:\[(?P<size>\d+)\])?").unwrap();
-    match lines.next() {
-        Some(Ok(line)) if line.starts_with("typedef struct") => {
-            println!("| {}:", io);
-            let mut io_data = vec![];
-            while let Some(Ok(line)) = lines.next() {
-                if line.contains(io) {
-                    break;
-                } else {
-                    if let Some(caps) = re.captures(&line) {
-                        let size = caps.name("size").map(|m| m.as_str());
-                        println!("|  - {:<22}: {:>5}", &caps["name"], size.unwrap_or("1"),);
-                        io_data.push(IO::new(&caps["name"], size))
+impl SimulinkStruct {
+    /// Parse the Simulink C header file to extract inputs, outputs or states variables
+    fn parse_io(lines: &mut std::io::Lines<BufReader<File>>) -> Option<Self> {
+        let re_prop = Regex::new(r"_T (?P<name>\w+)(?:\[(?P<size>\d+)\])?").unwrap();
+        let re_struct = Regex::new(r"} (\w+);").unwrap();
+        let mut this: Option<Self> = Default::default();
+        'header: loop {
+            match lines.next() {
+                Some(Ok(line)) if line.starts_with("typedef struct") => {
+                    println!("| Struct:");
+                    while let Some(Ok(line)) = lines.next() {
+                        if let Some(caps) = re_struct.captures(&line) {
+                            let name = caps.get(1).unwrap().as_str().to_string();
+                            if name.starts_with("ConstP") {
+                                this = None;
+                                continue 'header;
+                            }
+                            println!("| {}", name);
+                            this.get_or_insert(Default::default()).name = name;
+                            break 'header;
+                        }
+                        if let Some(caps) = re_prop.captures(&line) {
+                            let size = caps.name("size").map(|m| m.as_str());
+                            println!("|  - {:<22}: {:>5}", &caps["name"], size.unwrap_or("1"),);
+                            this.get_or_insert(Default::default())
+                                .properties
+                                .push(IO::new(&caps["name"], size));
+                        }
                     }
                 }
+                Some(_) => continue 'header,
+                None => break 'header,
             }
-            Some(List(io_data))
         }
-        _ => None,
+        this
+    }
+    fn default_as_string(&self) -> String {
+        format!(
+            r"
+impl Default for {name} {{
+    fn default() -> Self {{
+        Self {{ {properties} }}
+    }}
+}}
+        ",
+            name = self.name,
+            properties = self.properties.to_string()
+        )
     }
 }
-
 /// Simulink control system C source and header files parser and builder
 ///
 /// # Example
@@ -231,16 +267,8 @@ impl Sys {
                 }
             }
         };
-        while let Some(Ok(line)) = lines.next() {
-            if line.contains("External inputs") {
-                model.inputs = parse_io(&mut lines, "ExtU").unwrap();
-            }
-            if line.contains("External outputs") {
-                model.outputs = parse_io(&mut lines, "ExtY").unwrap();
-            }
-            if line.contains("Block signals") {
-                model.states = parse_io(&mut lines, "DW").unwrap();
-            }
+        while let Some(data) = SimulinkStruct::parse_io(&mut lines) {
+            model.simulink_struct.push(data);
         }
         model
     }
@@ -298,8 +326,3 @@ impl Display for Sys {
         model.fmt(f)
     }
 }
-/*
-pub fn build() {
-    let sys = Sys::new();
-    sys.compile().generate_module();
-} */
