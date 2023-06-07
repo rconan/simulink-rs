@@ -199,6 +199,67 @@ pub struct Sys {
     headers: Vec<PathBuf>,
 }
 
+pub struct Builder {
+    controller_type: Option<String>,
+    sys_folder: String,
+}
+impl Default for Builder {
+    fn default() -> Self {
+        Self {
+            controller_type: Default::default(),
+            sys_folder: "sys".into(),
+        }
+    }
+}
+impl Builder {
+    /// Sets the name of the Rust structure that acts as a wrapper for the Simulink C code
+    ///
+    /// If not set, the structure is given the same name than the Simulink control model
+    pub fn name<S: Into<String>>(mut self, rs_type: S) -> Self {
+        self.controller_type = Some(rs_type.into());
+        self
+    }
+    /// Sets the name of the folder with the C header and source file
+    ///
+    /// If not set, expect the folder to be named "sys"
+    pub fn folder<S: Into<String>>(mut self, folder: S) -> Self {
+        self.sys_folder = folder.into();
+        self
+    }
+    /// Builds a new Simulink C to Rust wrapper
+    pub fn build(self) -> Sys {
+        let sys = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join(self.sys_folder);
+
+        let mut sources = vec![];
+        let mut headers = vec![];
+
+        if let Ok(entries) = fs::read_dir(&sys) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let file_name = entry.path();
+                    if let Some(extension) = file_name.extension() {
+                        match extension.to_str() {
+                            Some("c") => {
+                                sources.push(file_name);
+                            }
+                            Some("h") => {
+                                headers.push(file_name);
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+            }
+        }
+
+        Sys {
+            controller: self.controller_type,
+            sources,
+            headers,
+        }
+    }
+}
+
 impl Sys {
     /// Create a new Simulink FFI
     ///
@@ -233,6 +294,10 @@ impl Sys {
             sources,
             headers,
         }
+    }
+    /// Creates a builder for the Simulink C to Rust wrapper
+    pub fn builder() -> Builder {
+        Default::default()
     }
     /// Returns the main header file
     fn header(&self) -> Option<&str> {
