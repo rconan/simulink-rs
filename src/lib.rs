@@ -14,178 +14,12 @@ use std::{
     fmt::{Debug, Display},
     fs::{self, File},
     io::{BufRead, BufReader},
-    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
 };
 
-/// Simulink structure properties
-#[derive(Debug, Default)]
-pub struct IO {
-    /// i/o variable name
-    pub name: String,
-    /// i/o variable size
-    pub size: Option<usize>,
-}
-impl IO {
-    /// Creates a new property
-    fn new(name: &str, size: Option<&str>) -> Self {
-        Self {
-            name: name.to_string(),
-            size: size.and_then(|s| s.parse().ok()),
-        }
-    }
-}
-/// List of Simulink properties
-#[derive(Debug, Default)]
-pub struct List(Vec<IO>);
-impl Deref for List {
-    type Target = Vec<IO>;
+mod model;
+use model::{Model, Simulink};
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DerefMut for List {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl Display for List {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let var: Vec<_> = self
-            .0
-            .iter()
-            .map(|IO { name, size }| {
-                if let Some(size) = size {
-                    format!("{}: [Default::default(); {}]", name, size)
-                } else {
-                    format!("{}: Default::default()", name)
-                }
-            })
-            .collect();
-        writeln!(f, "\n{}", var.join(",\n"))
-    }
-}
-
-/// Simulink structure
-#[derive(Debug, Default)]
-pub struct SimulinkStruct {
-    pub name: String,
-    pub properties: List,
-}
-
-/// Simulink model description
-#[derive(Default)]
-struct Model {
-    name: String,
-    simulink_struct: Vec<SimulinkStruct>,
-}
-
-impl Display for Model {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            r"
-/// Simulink controller wrapper
-#[derive(Debug, Clone, Copy, Default)]
-pub struct {model} {{
-    // Inputs Simulink structure
-    pub inputs: ExtU_{model}_T,
-    // Outputs Simulink structure
-    pub outputs: ExtY_{model}_T,
-    states: DW_{model}_T,
-}}",
-            model = self.name,
-        )?;
-
-        for simulink_struct in &self.simulink_struct {
-            writeln!(f, r"{}", simulink_struct.default_as_string())?;
-        }
-        writeln!(
-            f,
-            r"
- impl {model} {{
-    /// Creates a new controller
-    pub fn new() -> Self {{
-        let mut this: Self = Default::default();
-        let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
-            dwork: &mut this.states as *mut _,
-        }};
-        unsafe {{
-             {model}_initialize(&mut data as *mut _)
-        }}
-        this
-    }}
-    /// Steps the controller
-    pub fn step(&mut self) {{
-        let mut data: RT_MODEL_{model}_T = tag_RTM_{model}_T {{
-            dwork: &mut self.states as *mut _,
-        }};
-        unsafe {{
-            {model}_step(
-                &mut data as *mut _,
-                &mut self.inputs as *mut _,
-                &mut self.outputs as *mut _,
-            )
-        }}
-    }}
-}}
-        ",
-            model = self.name,
-        )
-    }
-}
-
-impl SimulinkStruct {
-    /// Parse the Simulink C header file to extract inputs, outputs or states variables
-    fn parse_io(lines: &mut std::io::Lines<BufReader<File>>) -> Option<Self> {
-        let re_prop = Regex::new(r"_T (?P<name>\w+)(?:\[(?P<size>\d+)\])?").unwrap();
-        let re_struct = Regex::new(r"} (\w+);").unwrap();
-        let mut this: Option<Self> = Default::default();
-        'header: loop {
-            match lines.next() {
-                Some(Ok(line)) if line.starts_with("typedef struct") => {
-                    println!("| Struct:");
-                    while let Some(Ok(line)) = lines.next() {
-                        if let Some(caps) = re_struct.captures(&line) {
-                            let name = caps.get(1).unwrap().as_str().to_string();
-                            if name.starts_with("ConstP") {
-                                this = None;
-                                continue 'header;
-                            }
-                            println!("| {}", name);
-                            this.get_or_insert(Default::default()).name = name;
-                            break 'header;
-                        }
-                        if let Some(caps) = re_prop.captures(&line) {
-                            let size = caps.name("size").map(|m| m.as_str());
-                            println!("|  - {:<22}: {:>5}", &caps["name"], size.unwrap_or("1"),);
-                            this.get_or_insert(Default::default())
-                                .properties
-                                .push(IO::new(&caps["name"], size));
-                        }
-                    }
-                }
-                Some(_) => continue 'header,
-                None => break 'header,
-            }
-        }
-        this
-    }
-    fn default_as_string(&self) -> String {
-        format!(
-            r"
-impl Default for {name} {{
-    fn default() -> Self {{
-        Self {{ {properties} }}
-    }}
-}}
-        ",
-            name = self.name,
-            properties = self.properties.to_string()
-        )
-    }
-}
 /// Simulink control system C source and header files parser and builder
 ///
 /// # Example
@@ -193,6 +27,7 @@ impl Default for {name} {{
 /// let sys = Sys::new(Some("MySimulinkController"));
 /// sys.compile().generate_module();
 /// ```
+#[derive(Debug, Default, Clone)]
 pub struct Sys {
     controller: Option<String>,
     sources: Vec<PathBuf>,
@@ -315,7 +150,9 @@ impl Sys {
     /// Extract the model name and the lists of inputs, outputs and states variables
     /// and creates a [Model]
     fn parse_header(&self) -> Model {
-        let Some(header) = self.header() else { panic!("cannot find error in sys")};
+        let Some(header) = self.header() else {
+            panic!("cannot find error in sys")
+        };
         let file = File::open(header).expect(&format!("file {:?} not found", header));
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
@@ -332,8 +169,8 @@ impl Sys {
                 }
             }
         };
-        while let Some(data) = SimulinkStruct::parse_io(&mut lines) {
-            model.simulink_struct.push(data);
+        while let Some(data) = Simulink::parse_io(&mut lines) {
+            model.simulink.push(data);
         }
         model
     }
@@ -363,7 +200,7 @@ impl Sys {
 
         cc_builder.compile(lib.as_str());
         let bindings = bindings_builder
-            .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .generate()
             .expect("Unable to generate bindings");
         let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -388,6 +225,6 @@ impl Display for Sys {
             writeln!(f, "#[allow(dead_code)]")?;
             writeln!(f, "pub type {} = {};", controller, model.name)?;
         }
-        model.fmt(f)
+        <Model as Display>::fmt(&model, f)
     }
 }
