@@ -77,9 +77,39 @@ impl<'de> ::serde::de::Deserialize<'de> for ExtU_M1SA_Control_CS_T {
         struct SimulinkVisitor;
         impl<'de> ::serde::de::Visitor<'de> for SimulinkVisitor {
             type Value = ExtU_M1SA_Control_CS_T;
+
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("struct ExtU_M1SA_Control_CS_T")
             }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
+            where
+                V: ::serde::de::SeqAccess<'de>,
+            {
+                let LC_FxyzMxyz_CG: [f64; 2] = seq
+                    .next_element::<Vec<f64>>()?
+                    .ok_or_else(|| ::serde::de::Error::invalid_length(2, &self))?
+                    .try_into()
+                    .map_err(|_| {
+                        ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
+                    })?;
+                let SA_offsetF_cmd: [f64; 306] = seq
+                    .next_element::<Vec<f64>>()?
+                    .ok_or_else(|| ::serde::de::Error::invalid_length(306, &self))?
+                    .try_into()
+                    .map_err(|_| {
+                        ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
+                    })?;
+                let scalar = seq
+                    .next_element::<f64>()?
+                    .ok_or_else(|| ::serde::de::Error::invalid_length(1, &self))?;
+                Ok(ExtU_M1SA_Control_CS_T {
+                    LC_FxyzMxyz_CG,
+                    SA_offsetF_cmd,
+                    scalar,
+                })
+            }
+
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
                 A: ::serde::de::MapAccess<'de>,

@@ -16,10 +16,44 @@ impl DeserializeImpl for List {
 }
 
 pub trait Visitor {
-    fn visit(&self) -> String;
+    fn visit_map(&self) -> String;
+    fn visit_seq(&self) -> String;
 }
 impl Visitor for List {
-    fn visit(&self) -> String {
+    fn visit_seq(&self) -> String {
+        self.iter()
+            .map(|field| {
+                if let Some(size) = field.size {
+                    format!(
+                        r#"
+let {0}: [f64; {1}] = seq
+    .next_element::<Vec<{2}>>()?
+    .ok_or_else(|| ::serde::de::Error::invalid_length(2, &self))?
+    .try_into()
+    .map_err(|_| {{
+        ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
+    }})?;
+        "#,
+                        field.name, size, field.dtype
+                    )
+                } else {
+                    format!(
+                        r#"
+let {0} = seq
+    .next_element::<{1}>()?
+    .ok_or_else(|| ::serde::de::Error::invalid_length(1, &self))?
+    .try_into()
+    .map_err(|_| {{
+        ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
+    }})?;
+        "#,
+                        field.name, field.dtype
+                    )
+                }
+            })
+            .collect()
+    }
+    fn visit_map(&self) -> String {
         let ((v1, v2), v3): ((Vec<_>, Vec<_>), Vec<_>) = self
             .iter()
             .map(|field| {
@@ -132,11 +166,20 @@ _ => Err(::serde::de::Error::unknown_field(value, FIELDS)),
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {{
                 formatter.write_str("struct {sim}")
             }}
+            fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
+            where
+                V: ::serde::de::SeqAccess<'de>,
+            {{
+{seq_visitor}
+Ok({sim} {{
+    {fields}
+}})
+            }}
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
                 A: ::serde::de::MapAccess<'de>,
             {{
-{visitor}
+{map_visitor}
 Ok({sim} {{
     {fields}
 }})
@@ -154,7 +197,8 @@ Ok({sim} {{
                 .collect::<Vec<String>>()
                 .join(", "),
             fields_match = self.properties.deserialize_impl(),
-            visitor = self.properties.visit(),
+            seq_visitor = self.properties.visit_seq(),
+            map_visitor = self.properties.visit_map(),
         )
     }
 }
