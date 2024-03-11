@@ -21,37 +21,45 @@ pub trait Visitor {
 }
 impl Visitor for List {
     fn visit_seq(&self) -> String {
-        self.iter()
-            .map(|field| {
-                if let Some(size) = field.size {
-                    format!(
-                        r#"
+        let mut n = 0;
+        let mut visit = vec![];
+        for field in self.iter() {
+            visit.push(if let Some(size) = field.size {
+                n += size;
+                format!(
+                    r#"
 let {0}: [f64; {1}] = seq
     .next_element::<Vec<{2}>>()?
-    .ok_or_else(|| ::serde::de::Error::invalid_length(2, &self))?
+    .ok_or_else(|| ::serde::de::Error::invalid_length({3}, &self))?
     .try_into()
     .map_err(|_| {{
         ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
     }})?;
         "#,
-                        field.name, size, field.dtype
-                    )
-                } else {
-                    format!(
-                        r#"
+                    field.name,
+                    size,
+                    field.dtype,
+                    n - size
+                )
+            } else {
+                n += 1;
+                format!(
+                    r#"
 let {0} = seq
     .next_element::<{1}>()?
-    .ok_or_else(|| ::serde::de::Error::invalid_length(1, &self))?
+    .ok_or_else(|| ::serde::de::Error::invalid_length({2}, &self))?
     .try_into()
     .map_err(|_| {{
         ::serde::de::Error::invalid_value(::serde::de::Unexpected::Seq, &self)
     }})?;
         "#,
-                        field.name, field.dtype
-                    )
-                }
-            })
-            .collect()
+                    field.name,
+                    field.dtype,
+                    n - 1
+                )
+            });
+        }
+        visit.into_iter().collect()
     }
     fn visit_map(&self) -> String {
         let ((v1, v2), v3): ((Vec<_>, Vec<_>), Vec<_>) = self
